@@ -1,0 +1,5 @@
+# Ignore environment files
+.env
+
+# Keep example environment file
+!.env.example

@@ -1,0 +1,224 @@
+# /========================================================================\
+# |        HEIMDALL - INTELLIGENT SOLANA RPC GATEWAY - NGINX CONFIG        |
+# |========================================================================|
+# | This configuration creates a dynamic, multi-layered RPC gateway.       |
+# | It routes requests based on client preferences (via HTTP headers),     |
+# | offers automatic failover for a robust, free service, and includes     |
+# | all major RPC providers with a free tier.                              |
+# \========================================================================/
+
+# --- DYNAMIC KEY SELECTION MAPS ---
+# These maps check for user-provided keys in HTTP headers.
+# If a header is found, its value is used. Otherwise, the gateway's
+# default key from the environment variables is used as a fallback.
+
+map $http_x_syndica_key $syndica_key_to_use {
+    default        "${SYNDICA_API_KEY}";
+    ~.             $http_x_syndica_key;
+}
+
+map $http_x_ankr_key $ankr_key_to_use {
+    default        "${ANKR_API_KEY}";
+    ~.             $http_x_ankr_key;
+}
+
+map $http_x_alchemy_key $alchemy_key_to_use {
+    default        "${ALCHEMY_API_KEY}";
+    ~.             $http_x_alchemy_key;
+}
+
+map $http_x_chainstack_key $chainstack_key_to_use {
+    default        "${CHAINSTACK_API_KEY}";
+    ~.             $http_x_chainstack_key;
+}
+
+map $http_x_quicknode_token $quicknode_token_to_use {
+    default        "${QUICKNODE_AUTH_TOKEN}";
+    ~.             $http_x_quicknode_token;
+}
+
+map $http_x_helius_key $helius_key_to_use {
+    default        "${HELIUS_API_KEY}";
+    ~.             $http_x_helius_key;
+}
+
+# DNS resolver to resolve hostnames of external providers
+resolver 8.8.8.8 valid=300s;
+resolver_timeout 5s;
+
+# --- RATE LIMITING ZONE ---
+# Defines a shared memory zone named "per_ip" that tracks clients by their IP address.
+# It allows an average of 5 requests per second (r/s).
+# The zone size (10m) can store state for about 160,000 IP addresses.
+limit_req_zone $binary_remote_addr zone=per_ip:10m rate=5r/s;
+
+#---------------------------------------
+# 1. UPSTREAM PROVIDER POOLS (HTTP/S)
+#---------------------------------------
+upstream free_tier_syndica {
+    server solana-mainnet.api.syndica.io:443;
+}
+upstream free_tier_ankr {
+    server rpc.ankr.com:443;
+}
+upstream free_tier_alchemy {
+    server solana-mainnet.g.alchemy.com:443;
+}
+upstream free_tier_chainstack {
+    server solana-mainnet.core.chainstack.com:443;
+}
+upstream free_tier_quicknode {
+    zone free_tier_quicknode 64k;
+    server ${QUICKNODE_HOSTNAME}:443 resolve;
+}
+upstream public_fallback {
+    server api.mainnet-beta.solana.com:443;
+}
+upstream region_helius {
+    zone region_helius 64k;
+    server mainnet.helius-rpc.com:443 resolve;
+}
+
+
+#-----------------------------------------------
+# 2. UPSTREAM PROVIDER POOLS (WEBSOCKETS/WSS)
+#-----------------------------------------------
+upstream ws_free_syndica {
+    server solana-mainnet.api.syndica.io:443;
+}
+upstream ws_free_alchemy {
+    server solana-mainnet.g.alchemy.com:443;
+}
+upstream ws_free_quicknode {
+    zone ws_free_quicknode 64k;
+    server ${QUICKNODE_HOSTNAME}:443 resolve;
+}
+upstream ws_free_chainstack {
+    server solana-mainnet.core.chainstack.com:443;
+}
+upstream ws_helius {
+    zone ws_helius 64k;
+    server mainnet.helius-rpc.com:443 resolve;
+}
+
+#---------------------------------------
+# 3. LOGGING AND SERVER CONFIGURATION
+#---------------------------------------
+log_format rpc_logs '$remote_addr - $time_local "$request" '
+                    'status=$status upstream=$upstream_addr '
+                    'latency=$upstream_response_time';
+
+access_log /var/log/nginx/access.log rpc_logs;
+error_log /var/log/nginx/error.log warn;
+
+server {
+    listen 80;
+
+    #------------------------------------------
+    # LOCATION: DYNAMIC RPC ROUTING (HTTP/S)
+    #------------------------------------------
+    location /rpc {
+        # --- APPLY RATE LIMIT ---
+        limit_req zone=per_ip burst=10 nodelay;
+
+        proxy_pass https://free_tier_syndica/api-key/$syndica_key_to_use;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_next_upstream error timeout http_502 http_503 http_504;
+        proxy_intercept_errors on;
+        error_page 502 503 504 = @failover_to_ankr;
+    }
+
+    #-------------------------------------------
+    # LOCATION: REGIONAL RPC ROUTING (HTTP/S)
+    #-------------------------------------------
+    location /rpc-regional {
+        # --- APPLY RATE LIMIT ---
+        limit_req zone=per_ip burst=10 nodelay;
+
+        # This location uses Helius as the regional provider
+        proxy_pass https://region_helius/?api-key=$helius_key_to_use;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    #-------------------------------
+    # LOCATION: WEBSOCKET ROUTING
+    #-------------------------------
+    location /rpc-ws {
+        # --- APPLY RATE LIMIT ---
+        limit_req zone=per_ip burst=10 nodelay;
+
+        proxy_pass https://ws_free_syndica/api-key/$syndica_key_to_use;
+        proxy_next_upstream error timeout;
+        error_page 502 503 504 = @failover_ws_alchemy;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 86400s;
+    }
+    
+    #----------------------------------------
+    # INTERNAL FAILOVER LOCATIONS (HTTP/S)
+    #----------------------------------------
+    location @failover_to_ankr {
+        # Note: Ankr free tier is devnet only, so this will likely fail and proceed to the next step.
+        proxy_pass https://free_tier_ankr/solana_devnet/$ankr_key_to_use;
+        proxy_next_upstream error timeout http_502 http_503 http_504;
+        error_page 502 503 504 = @failover_to_alchemy;
+    }
+    location @failover_to_alchemy {
+        proxy_pass https://free_tier_alchemy/v2/$alchemy_key_to_use;
+        proxy_next_upstream error timeout http_502 http_503 http_504;
+        error_page 502 503 504 = @failover_to_chainstack;
+    }
+    location @failover_to_chainstack {
+        proxy_pass https://free_tier_chainstack/$chainstack_key_to_use;
+        proxy_next_upstream error timeout http_502 http_503 http_504;
+        error_page 502 503 504 = @failover_to_quicknode;
+    }
+    location @failover_to_quicknode {
+        proxy_pass https://free_tier_quicknode/$quicknode_token_to_use;
+        proxy_next_upstream error timeout http_502 http_503 http_504;
+        error_page 502 503 504 = @fallback_public_rpc;
+    }
+    location @fallback_public_rpc {
+        proxy_pass https://public_fallback;
+    }
+
+    #-------------------------------------
+    # INTERNAL FAILOVER LOCATIONS (WSS)
+    #-------------------------------------
+    location @failover_ws_alchemy {
+        proxy_pass https://ws_free_alchemy/v2/$alchemy_key_to_use;
+        proxy_next_upstream error timeout;
+        error_page 502 503 504 = @failover_ws_chainstack;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+    location @failover_ws_chainstack {
+        proxy_pass https://ws_free_chainstack/$chainstack_key_to_use;
+        proxy_next_upstream error timeout;
+        error_page 502 503 504 = @failover_ws_quicknode;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+    location @failover_ws_quicknode {
+        proxy_pass https://ws_free_quicknode/$quicknode_token_to_use;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+
+    #---------------------------
+    # OTHER SERVICE LOCATIONS
+    #---------------------------
+    location /health {
+        add_header Content-Type text/plain;
+        return 200 'OK';
+    }
+}
+

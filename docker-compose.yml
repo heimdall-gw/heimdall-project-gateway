@@ -1,49 +1,17 @@
-version: '3.8'
-
 services:
   nginx-gateway:
-    build: ./nginx 
+    build: ./nginx
     ports:
       - "80:80"
-      - "8081:8081"
     networks:
       - solana-net
-    depends_on:
-      - rpc-provider-1
-      - rpc-provider-2
-      - transaction-optimizer
-      - monitoring-dashboard
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost/health"]
       interval: 10s
       timeout: 5s
       retries: 3
-
-  rpc-provider-1:
-    image: ealen/echo-server
-    environment:
-      - PORT=8080
-    networks:
-      - solana-net
-
-  rpc-provider-2:
-    image: ealen/echo-server
-    environment:
-      - PORT=8080
-    networks:
-      - solana-net
-
-  transaction-optimizer:
-    image: alpine 
-    command: ["sleep", "infinity"] 
-    networks:
-      - solana-net
-
-  monitoring-dashboard:
-    image: alpine
-    command: ["sleep", "infinity"]
-    networks:
-      - solana-net
+    env_file:
+      - .env
 
 networks:
   solana-net:
