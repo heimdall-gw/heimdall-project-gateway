@@ -1,0 +1,28 @@
+providers:
+  - name: "Syndica"
+    http_url: "https://solana-mainnet.api.syndica.io/api-key/"
+    ws_url: "wss://solana-mainnet.api.syndica.io/api-key/"
+    api_key_env: "SYNDICA_API_KEY"
+
+  - name: "Ankr"
+    http_url: "https://rpc.ankr.com/solana_devnet/"
+    api_key_env: "ANKR_API_KEY"
+
+  - name: "Alchemy"
+    http_url: "https://solana-mainnet.g.alchemy.com/v2/"
+    ws_url: "wss://solana-mainnet.g.alchemy.com/v2/"
+    api_key_env: "ALCHEMY_API_KEY"
+
+  - name: "Chainstack"
+    http_url: "https://solana-mainnet.core.chainstack.com/"
+    ws_url: "wss://solana-mainnet.core.chainstack.com/"
+    api_key_env: "CHAINSTACK_API_KEY"
+
+  - name: "Helius"
+    http_url: "https://mainnet.helius-rpc.com/?api-key="
+    ws_url: "wss://mainnet.helius-rpc.com/?api-key="
+    api_key_env: "HELIUS_API_KEY"
+  
+  - name: "QuickNode"
+    hostname_env: "QUICKNODE_HOSTNAME"
+    auth_token_env: "QUICKNODE_AUTH_TOKEN"

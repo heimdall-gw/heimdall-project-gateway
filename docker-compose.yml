@@ -1,18 +1,14 @@
 services:
-  nginx-gateway:
+  nginx:
     build: ./nginx
     ports:
       - "80:80"
-    networks:
-      - solana-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
+    depends_on:
+      - heimdall-app
+
+  heimdall-app:
+    build: ./app
+    expose:
+      - "8080"
     env_file:
       - .env
-
-networks:
-  solana-net:
-    driver: bridge
